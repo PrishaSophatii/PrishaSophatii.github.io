@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>A 3B model in your pocket · Prisha Sophat</title>
+  <meta name="description" content="How Apple's Foundation Models framework, guided generation and tool calling map onto grounded shopping assistants.">
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+  <div class="progress"></div>
+  <nav class="nav"><a href="../index.html">Home</a><a href="../index.html#journey">Journey</a><a href="../index.html#blog">Blog</a><a href="../index.html#contact">Contact</a></nav>
+  <article class="article">
+    <div class="eyebrow">Generative AI · On-device</div>
+    <h1>A 3B model in your pocket: guided generation for product Q&amp;A</h1>
+    <div class="byline">Oct 2026 · 9 min read · Inspired by Apple's 2025 foundation model update</div>
+
+    <p>In 2025 Apple opened its roughly 3 billion parameter on-device language model to developers through the Foundation Models framework. Two details in Apple's write-up stood out to me as someone who thinks about retail ML: <strong>guided generation</strong> and <strong>tool calling</strong>. Together they turn a small model into something you can trust inside a shopping flow, because its output is typed and its facts come from your own systems.</p>
+
+    <h2>What Apple shipped</h2>
+    <ul>
+      <li><strong>A compact model built for Apple silicon.</strong> The on-device model is split into two blocks at a 5:3 depth ratio, and the second block reuses the KV cache of the first. Apple reports that this cuts KV cache memory by 37.5% and improves time to first token.</li>
+      <li><strong>Aggressive compression.</strong> Decoder weights are quantized to 2 bits per weight with quantization-aware training, and low-rank adapters recover quality.</li>
+      <li><strong>Guided generation.</strong> Mark a Swift struct with <code>@Generable</code>, and the framework injects the schema into the prompt while an OS daemon applies constrained decoding so the response always parses into that type.</li>
+      <li><strong>Tool calling.</strong> Implement the <code>Tool</code> protocol and the framework handles parallel and serial tool calls, using a model post-trained for tool use.</li>
+    </ul>
+    <p>Apple is explicit that this model is not meant to be a general knowledge chatbot. That is exactly why it fits retail: you never want a shopping assistant inventing specs or prices from its weights.</p>
+
+    <h2>The shape of a grounded product assistant</h2>
+    <p>Consider a shopper on a product page asking "Will this case fit my iPhone 15 Pro and does it work with MagSafe?" A trustworthy answer needs three things: the shopper's question, the official compatibility data, and an output format the page can render (an answer, plus the products it refers to so the UI can link them).</p>
+
+<pre><code>import FoundationModels
+
+@Generable
+struct ProductAnswer {
+    @Guide(description: "A short, factual answer for the shopper")
+    var answer: String
+    @Guide(description: "Product identifiers mentioned in the answer")
+    var referencedProducts: [String]
+    @Guide(description: "True only if the answer is fully supported by tool results")
+    var grounded: Bool
+}
+
+struct CompatibilityLookup: Tool {
+    let name = "compatibilityLookup"
+    let description = "Returns official compatibility data for an accessory"
+
+    @Generable
+    struct Arguments {
+        @Guide(description: "The accessory's product identifier")
+        var productID: String
+    }
+
+    func call(arguments: Arguments) async throws -> String {
+        try await Catalog.compatibility(for: arguments.productID)   // your source of truth
+    }
+}
+
+let session = LanguageModelSession(
+    tools: [CompatibilityLookup()],
+    instructions: "Answer only from tool results. If unsure, say so."
+)
+let reply = try await session.respond(to: question, generating: ProductAnswer.self)
+render(reply.content)
+</code></pre>
+    <p>Because the output is a typed <code>ProductAnswer</code>, the page never has to parse free text. The <code>grounded</code> flag gives the UI a cheap safety valve: if the model says it is not fully supported by the tool result, show the spec sheet instead of an answer.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 720 170" role="img" aria-label="Question to model to tool to typed answer">
+        <g font-family="Inter" font-size="14" text-anchor="middle">
+          <rect x="10" y="55" width="140" height="60" rx="14" fill="#f6e1c8"/><text x="80" y="90" fill="#3d2c2e">Shopper question</text>
+          <rect x="200" y="55" width="140" height="60" rx="14" fill="#f2a65a"/><text x="270" y="90" fill="#fff" font-weight="600">On-device model</text>
+          <rect x="390" y="10" width="140" height="56" rx="14" fill="#fff"/><text x="460" y="43" fill="#3d2c2e">Catalog tool</text>
+          <rect x="390" y="104" width="140" height="56" rx="14" fill="#fff"/><text x="460" y="137" fill="#3d2c2e">Constrained decode</text>
+          <rect x="580" y="55" width="130" height="60" rx="14" fill="#e07a5f"/><text x="645" y="90" fill="#fff" font-weight="600">ProductAnswer</text>
+        </g>
+        <g stroke="#e07a5f" stroke-width="3" fill="none"><path d="M150 85h50"/><path d="M340 75 L390 40"/><path d="M390 50 L340 80" stroke-dasharray="5 5"/><path d="M340 95 L390 130"/><path d="M530 132 L580 95"/></g>
+      </svg>
+      <figcaption>Facts come from the tool; structure comes from constrained decoding.</figcaption>
+    </figure>
+
+    <h2>Where on-device beats server for retail</h2>
+    <ul>
+      <li><strong>Personal context stays local.</strong> The device can know which products someone owns. A compatibility answer that says "this fits the iPhone you have" does not require sending the device list anywhere.</li>
+      <li><strong>Inference cost scales with customers, not servers.</strong> Apple describes on-device inference as free of cost to developers. Peak events like a product launch would otherwise be the most expensive moment for an LLM feature.</li>
+      <li><strong>Latency is predictable.</strong> KV cache sharing and low-bit weights are designed for fast first tokens, which matters on a product page where people skim.</li>
+    </ul>
+
+    <h2>Where the server still wins</h2>
+    <p>Catalog-wide reasoning ("compare every Mac for video editing under a budget") needs fresh pricing, availability and more capacity. Apple's architecture already anticipates this with its larger server model on Private Cloud Compute. A good design routes simple, personal, grounded questions to the device and heavy comparative ones to the server, with the same typed output schema for both, so the UI does not care which one answered.</p>
+
+    <h2>How I would evaluate it</h2>
+    <ol>
+      <li><strong>Groundedness:</strong> automatically check every claim in <code>answer</code> against the tool output. Track the rate of ungrounded claims, not just thumbs up or down.</li>
+      <li><strong>Abstention quality:</strong> measure how often <code>grounded == false</code> when the tool really lacked the answer (good) versus when it had it (missed help).</li>
+      <li><strong>Business impact:</strong> A/B test on downstream outcomes like add-to-cart for compatible accessories and fewer returns for incompatibility, rather than engagement with the assistant itself.</li>
+      <li><strong>Adapter drift:</strong> Apple notes adapters must be retrained for each new base model version, so the eval suite has to be a regression gate in CI.</li>
+    </ol>
+
+    <blockquote>Small models become trustworthy when you give them a schema to fill and a source of truth to read from.</blockquote>
+
+    <div class="sources">
+      <strong>Sources</strong>
+      <ul>
+        <li><a href="https://machinelearning.apple.com/research/apple-foundation-models-2025-updates" target="_blank" rel="noopener">Updates to Apple's On-Device and Server Foundation Language Models</a>, Apple Machine Learning Research</li>
+        <li><a href="https://arxiv.org/abs/2507.13575" target="_blank" rel="noopener">Apple Intelligence Foundation Language Models: Tech Report 2025</a></li>
+      </ul>
+      <p style="font-size:14px;color:var(--muted)">Code is an illustrative sketch; check current Foundation Models framework documentation for exact signatures.</p>
+    </div>
+  </article>
+  <script src="../assets/article.js"></script>
+</body>
+</html>

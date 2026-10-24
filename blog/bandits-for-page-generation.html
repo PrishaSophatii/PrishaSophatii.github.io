@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bandits that build the page · Prisha Sophat</title>
+  <meta name="description" content="Treating store layout as a slate recommendation problem with contextual bandits, off-policy evaluation and guardrails.">
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+  <div class="progress"></div>
+  <nav class="nav"><a href="../index.html">Home</a><a href="../index.html#journey">Journey</a><a href="../index.html#blog">Blog</a><a href="../index.html#contact">Contact</a></nav>
+  <article class="article">
+    <div class="eyebrow">Recommendations · Decision automation</div>
+    <h1>Bandits that build the page</h1>
+    <div class="byline">Oct 2026 · 10 min read · Inspired by the Apple Store Online MLE role</div>
+
+    <p>The Apple Store Online team describes its scope as product search, recommendations covering both <em>ranking and page generation</em>, personalization of messaging, and generative AI. The preferred qualifications call out bandits, reinforcement learning and probabilistic models. "Page generation" is the phrase I keep coming back to. It means the question is not only "which product is most relevant?" but "which arrangement of modules, products and messages should this page show?"</p>
+    <p>This post is how I think about that problem.</p>
+
+    <h2>A page is a slate, not a list</h2>
+    <p>A store landing page might have a hero banner, a "shop by need" carousel, a trade-in message, an accessories row and a financing note. Each slot has candidate items. Their value interacts: showing a trade-in offer next to the newest iPhone is worth more than showing it next to cases. Ranking each slot independently ignores those interactions, and ranking every full layout is combinatorially impossible.</p>
+    <p>The practical middle ground is a <strong>contextual bandit over slots</strong>, where each slot's decision conditions on what earlier slots chose.</p>
+
+<pre><code>def build_page(context, slots, policy, explore=0.05):
+    page, log = [], []
+    for slot in slots:                                    # hero, carousel, message, ...
+        feats = [featurize(context, page, slot, c) for c in slot.candidates]
+        scores = policy.score(feats)                      # e.g. LinUCB or a neural reward model
+        probs  = softmax_with_floor(scores, floor=explore)
+        choice = sample(slot.candidates, probs)
+        page.append(choice)
+        log.append((slot.id, choice.id, probs[choice.idx]))  # keep the propensity!
+    return page, log
+</code></pre>
+    <p>The most important line is the last one in the loop. Logging the probability of the action actually taken is what makes everything after this possible.</p>
+
+    <h2>Why bandits fit retail traffic</h2>
+    <ul>
+      <li><strong>Inventory and campaigns change constantly.</strong> New products launch, promotions start and end. A bandit keeps exploring so a new module gets a fair chance without waiting for a full A/B test.</li>
+      <li><strong>Rewards are delayed and sparse.</strong> Purchases on high-consideration products happen days later. Using a blended reward (engagement now, add-to-bag soon, purchase later) with careful attribution windows keeps learning moving.</li>
+      <li><strong>Context is coarse by design.</strong> In a privacy-first store, the context is often device type, locale, referrer, time and what is on the page, not a rich user history. Contextual bandits work well with small, honest feature sets.</li>
+    </ul>
+
+    <h2>Evaluate before you ship: off-policy estimates</h2>
+    <p>Because every decision is logged with its propensity, a new policy can be evaluated offline using inverse propensity scoring or the more stable self-normalized and doubly robust variants. In plain terms: reweight past outcomes by how much more (or less) often the new policy would have taken those actions.</p>
+
+<pre><code>def snips(logs, new_policy):
+    w = [new_policy.prob(l.context, l.action) / l.logged_prob for l in logs]
+    return sum(wi * l.reward for wi, l in zip(w, logs)) / sum(w)
+</code></pre>
+    <p>This turns weeks of online testing into hours of offline iteration, and it lets you reject bad policies before a single customer sees them. It only works if exploration was never fully turned off, which is why the probability floor in <code>build_page</code> matters.</p>
+
+    <h2>Guardrails that matter more than the algorithm</h2>
+    <ol>
+      <li><strong>Business constraints as hard filters.</strong> Some modules are legally or contractually required in certain regions. Enforce them before scoring, never as soft penalties.</li>
+      <li><strong>Diversity and freshness.</strong> Penalize near-duplicate modules within a page so the slate does not show three iPad carousels.</li>
+      <li><strong>Safe exploration budgets.</strong> Cap exploration on high-stakes surfaces (the checkout path) and spend it on discovery surfaces instead.</li>
+      <li><strong>Long-term metrics.</strong> Click-optimized pages can drift toward attention-grabbing modules. Track returns, support contacts and repeat visits alongside conversion.</li>
+    </ol>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 720 150" role="img" aria-label="Loop of decide, log, learn, evaluate">
+        <g font-family="Inter" font-size="15" text-anchor="middle" font-weight="600">
+          <circle cx="90" cy="75" r="55" fill="#e07a5f"/><text x="90" y="80" fill="#fff">Decide</text>
+          <circle cx="270" cy="75" r="55" fill="#f2a65a"/><text x="270" y="80" fill="#fff">Log + propensity</text>
+          <circle cx="450" cy="75" r="55" fill="#f4c95d"/><text x="450" y="80" fill="#3d2c2e">Learn</text>
+          <circle cx="630" cy="75" r="55" fill="#81b29a"/><text x="630" y="80" fill="#fff">Evaluate offline</text>
+        </g>
+        <g stroke="#6b4f4f" stroke-width="2.5" fill="none"><path d="M145 75h70"/><path d="M325 75h70"/><path d="M505 75h70"/></g>
+      </svg>
+      <figcaption>The loop only closes if every decision logs how likely it was.</figcaption>
+    </figure>
+
+    <h2>Where generative AI fits</h2>
+    <p>Generative models expand the candidate set: personalized headline variants, "shop by need" collections generated from a catalog, or summaries of product differences. The bandit then decides which of those to show. Keeping generation and selection separate is healthy. The generator can be creative, while the bandit, with its logged propensities and off-policy checks, stays accountable for what customers actually see.</p>
+
+    <blockquote>Generate widely, select carefully, and log everything you need to prove the selection was right.</blockquote>
+
+    <div class="sources">
+      <strong>Sources and further reading</strong>
+      <ul>
+        <li>Apple Store Online Machine Learning Engineer job posting (200663515-0321): scope and preferred qualifications</li>
+        <li><a href="https://arxiv.org/abs/1003.0146" target="_blank" rel="noopener">Li et al., A Contextual-Bandit Approach to Personalized News Article Recommendation (LinUCB)</a></li>
+      </ul>
+    </div>
+  </article>
+  <script src="../assets/article.js"></script>
+</body>
+</html>

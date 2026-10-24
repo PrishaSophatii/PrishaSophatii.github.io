@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Personalizing a store without knowing the shopper · Prisha Sophat</title>
+  <meta name="description" content="What Apple's differential privacy and synthetic data research suggests for recommendations on the Apple Store Online.">
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+  <div class="progress"></div>
+  <nav class="nav"><a href="../index.html">Home</a><a href="../index.html#journey">Journey</a><a href="../index.html#blog">Blog</a><a href="../index.html#contact">Contact</a></nav>
+  <article class="article">
+    <div class="eyebrow">Privacy · Recommendations</div>
+    <h1>Personalizing a store without knowing the shopper</h1>
+    <div class="byline">Oct 2026 · 8 min read · Inspired by Apple Machine Learning Research</div>
+
+    <p>Most recommendation playbooks start the same way: log everything a user does, join it to an ID, and train on the result. Apple has spent years publicly arguing for a different starting point. In April 2025 its Machine Learning Research team described how it learns <em>aggregate</em> trends for Apple Intelligence features such as Genmoji and email summarization without collecting what any individual typed or received.</p>
+    <p>I wanted to understand that work in detail and then ask a practical question: what would the same ideas look like inside a retail recommender like the one behind the Apple Store Online?</p>
+
+    <h2>What Apple published</h2>
+    <p>There are two techniques in the post, and both only involve devices whose owners opted in to Device Analytics.</p>
+    <p><strong>1. Discovering popular prompts with local differential privacy.</strong> To find out which Genmoji prompts are common, Apple polls devices about a candidate fragment. Each device answers with a noisy signal: sometimes the truth, sometimes a random answer for a different fragment. The noise is calibrated so that, in Apple's words, hundreds of people need to use the same term before it becomes discoverable. Rare, potentially identifying prompts never surface, and responses are not linked to an IP address or Apple Account.</p>
+    <p><strong>2. Steering synthetic data with private nearest-neighbor votes.</strong> For email features, Apple generates a large set of <em>synthetic</em> emails with an LLM, embeds them, and sends those embeddings to a small number of opted-in devices. Each device embeds a sample of its own recent emails, finds which synthetic embedding is closest, and reports that choice through the same differential privacy machinery. Apple learns which synthetic examples are most representative in aggregate, then uses them to curate training and evaluation data. The email itself never leaves the device.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 720 220" role="img" aria-label="Synthetic candidates go to devices; devices return noisy votes; server aggregates">
+        <rect x="10" y="70" width="170" height="80" rx="16" fill="#f6e1c8"/>
+        <text x="95" y="105" text-anchor="middle" font-family="Inter" font-size="15" fill="#3d2c2e" font-weight="600">Server</text>
+        <text x="95" y="128" text-anchor="middle" font-family="Inter" font-size="12" fill="#6b4f4f">synthetic candidates</text>
+        <rect x="275" y="20" width="170" height="60" rx="14" fill="#fff"/>
+        <rect x="275" y="90" width="170" height="60" rx="14" fill="#fff"/>
+        <rect x="275" y="160" width="170" height="50" rx="14" fill="#fff"/>
+        <text x="360" y="55" text-anchor="middle" font-family="Inter" font-size="13" fill="#3d2c2e">device: nearest match</text>
+        <text x="360" y="125" text-anchor="middle" font-family="Inter" font-size="13" fill="#3d2c2e">device: nearest match</text>
+        <text x="360" y="190" text-anchor="middle" font-family="Inter" font-size="13" fill="#3d2c2e">…</text>
+        <rect x="540" y="70" width="170" height="80" rx="16" fill="#e07a5f"/>
+        <text x="625" y="105" text-anchor="middle" font-family="Inter" font-size="15" fill="#fff" font-weight="600">Aggregate</text>
+        <text x="625" y="128" text-anchor="middle" font-family="Inter" font-size="12" fill="#fff">noisy vote counts</text>
+        <g stroke="#f2a65a" stroke-width="3" fill="none"><path d="M180 100 L275 50"/><path d="M180 110 L275 120"/><path d="M180 120 L275 185"/><path d="M445 50 L540 100" stroke-dasharray="6 5"/><path d="M445 120 L540 110" stroke-dasharray="6 5"/><path d="M445 185 L540 120" stroke-dasharray="6 5"/></g>
+      </svg>
+      <figcaption>Candidates flow down in the clear; only noisy, unlinkable votes flow back.</figcaption>
+    </figure>
+
+    <h2>Why this matters for a store</h2>
+    <p>The Apple Store Online has a very different data profile from a social feed. Visits are infrequent and high-intent. Many shoppers are anonymous until checkout. A single purchase (a new iPhone, say) changes what is relevant for years. And the brand promise around privacy is part of the product, so "just log more" is not a strategy.</p>
+    <p>That pushes a recommender toward three habits that Apple's research makes concrete.</p>
+
+    <h3>Habit 1: Learn popularity, not people</h3>
+    <p>A surprisingly strong baseline in retail is "what are people like this, right now, choosing?" The Genmoji technique is essentially a private heavy-hitters algorithm. The store analogue is discovering frequent <em>bundles</em> or <em>query reformulations</em>, for example that shoppers who search "ipad for drawing" frequently refine to a specific model plus Apple Pencil. You only need the head of that distribution, which is exactly what calibrated noise preserves.</p>
+
+    <h3>Habit 2: Use synthetic data as the probe</h3>
+    <p>The email work flips the usual pipeline. Instead of pulling real data to the server, it pushes synthetic candidates out and asks which ones look real. For search and recommendations, I find this idea exciting for evaluation sets. An LLM can generate thousands of plausible shopping intents ("gift for a teenager who games", "replace a 2017 MacBook Air for school"). Privately voting on which intents are closest to real sessions gives you a test set that reflects actual demand without containing a single real query.</p>
+
+    <h3>Habit 3: Keep the personal part on the device</h3>
+    <p>Personalization still matters. The store can know, on the device and with permission, which products someone already owns. The clean split is a server model that ranks a broad candidate set using only aggregate and contextual signals, plus a lightweight re-rank on the device that uses personal context and never sends it back. "You already have AirPods Pro, here is AppleCare for them" is a better experience than recommending the AirPods you own.</p>
+
+<pre><code># Sketch: server ranks with aggregate signals, device re-ranks privately
+candidates = server.rank(query, context=coarse_context)          # no user id
+owned      = device.local_store.owned_products()                 # never uploaded
+reranked   = sorted(candidates,
+                    key=lambda p: p.score
+                                  - 2.0 * (p.sku in owned)        # don't re-sell what they have
+                                  + 0.5 * compat(p, owned))       # boost accessories that fit
+</code></pre>
+
+    <h2>The trade-offs worth being honest about</h2>
+    <ul>
+      <li><strong>The long tail fades.</strong> A threshold of hundreds of users means niche products are hard to learn about. Content-based features (specs, compatibility graphs) have to carry more of the weight for those items.</li>
+      <li><strong>Feedback loops are slower.</strong> Private aggregation needs volume, so metrics arrive in larger batches. Offline evaluation and off-policy methods become more important, not less.</li>
+      <li><strong>Privacy budgets are a product decision.</strong> Every question you ask devices spends budget. Choosing which questions are worth asking is a prioritization exercise with PMs, not just an engineering knob.</li>
+    </ul>
+
+    <blockquote>The interesting engineering is not in collecting more. It is in asking better questions of less.</blockquote>
+
+    <h2>What I would build first</h2>
+    <p>If I joined the team tomorrow, my first experiment would be small: generate a few thousand synthetic shopping intents, use them as a private evaluation set for search relevance, and compare the ranking it implies against today's offline metrics. It is cheap, it respects the privacy model, and it tells you quickly whether synthetic probes are representative enough to lean on for bigger decisions.</p>
+
+    <div class="sources">
+      <strong>Sources</strong>
+      <ul>
+        <li><a href="https://machinelearning.apple.com/research/differential-privacy-aggregate-trends" target="_blank" rel="noopener">Understanding Aggregate Trends for Apple Intelligence Using Differential Privacy</a>, Apple Machine Learning Research</li>
+        <li>Apple Store Online Machine Learning Engineer job posting (200663515-0321)</li>
+      </ul>
+    </div>
+  </article>
+  <script src="../assets/article.js"></script>
+</body>
+</html>

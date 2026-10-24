@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>2 bits per weight · Prisha Sophat</title>
+  <meta name="description" content="Lessons from Apple's quantization-aware training, KV-cache sharing and PT-MoE for serving retail ML under tight latency budgets.">
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+  <div class="progress"></div>
+  <nav class="nav"><a href="../index.html">Home</a><a href="../index.html#journey">Journey</a><a href="../index.html#blog">Blog</a><a href="../index.html#contact">Contact</a></nav>
+  <article class="article">
+    <div class="eyebrow">Infrastructure · Efficiency</div>
+    <h1>2 bits per weight: what model compression teaches retail ML</h1>
+    <div class="byline">Oct 2026 · 8 min read · Inspired by Apple's Foundation Models Tech Report 2025</div>
+
+    <p>Apple's 2025 foundation model tech report reads like a catalog of ways to spend less per token. It is written about language models, but almost every idea transfers to the problems an online store faces: rankers that must answer in milliseconds, traffic that spikes tenfold on launch day, and a growing list of LLM features competing for the same budget.</p>
+
+    <h2>The numbers that caught my eye</h2>
+    <ul>
+      <li><strong>On-device:</strong> decoder weights at <strong>2 bits per weight</strong> via quantization-aware training (QAT), embeddings at 4 bits, KV cache at 8 bits.</li>
+      <li><strong>Server:</strong> about <strong>3.56 bits per weight</strong> using ASTC, a GPU texture compression format repurposed for model weights so decompression rides on existing hardware.</li>
+      <li><strong>Quality cost:</strong> modest and mixed. Apple reports a 4.6% MGSM regression but a 1.5% MMLU improvement on device, and 2.7% / 2.3% regressions on the server, with low-rank adapters trained to recover quality.</li>
+      <li><strong>KV cache sharing:</strong> 37.5% less KV memory on device by letting the second block reuse the first block's cache.</li>
+      <li><strong>PT-MoE:</strong> the server model runs parallel "tracks" that only synchronize at block boundaries. With a track block depth of 4, synchronization overhead drops by 87.5%.</li>
+    </ul>
+
+    <h2>Lesson 1: Train for the deployment you will actually have</h2>
+    <p>The jump from post-training quantization to quantization-aware training is the key idea. If a model will run at 2 bits, let it learn at 2 bits. In retail ML, the same principle applies to <em>features</em>. If a feature will be stale by five minutes at serving time, or approximated by a cache, train with that staleness. Training-serving skew is the quantization error of feature pipelines, and the cure is identical: simulate deployment during training.</p>
+
+<pre><code># Train with the features you will really have at serving time
+def make_training_row(event):
+    snap = feature_store.as_of(event.ts - SERVING_LAG)   # not event.ts!
+    return snap.features(event.item_id), event.label
+</code></pre>
+
+    <h2>Lesson 2: Recover quality with small, targeted adapters</h2>
+    <p>Apple compresses aggressively and then trains low-rank adapters to win back what was lost. For a store, the parallel is a single strong, cheap base ranker plus small task-specific heads: one for search, one for accessories, one for trade-in messaging. The base model's cost is paid once; each head adds very little latency and can be retrained independently when a campaign changes.</p>
+
+    <h2>Lesson 3: Memory is often the real bottleneck</h2>
+    <p>KV cache sharing is a reminder that latency budgets are frequently about memory, not FLOPs. Retail systems hit the same wall in embedding tables: millions of product, query and context embeddings. Quantizing embedding tables to 8 or 4 bits and sharing towers between search and recommendations usually buys more headroom than shaving model layers.</p>
+
+    <figure class="diagram">
+      <svg viewBox="0 0 720 200" role="img" aria-label="Bar chart of bits per weight">
+        <g font-family="Inter" font-size="13" fill="#3d2c2e">
+          <text x="10" y="40">FP16 baseline</text><rect x="200" y="25" width="480" height="24" rx="8" fill="#e8998d"/><text x="690" y="42" text-anchor="end" fill="#fff" font-weight="600">16</text>
+          <text x="10" y="90">Server (ASTC)</text><rect x="200" y="75" width="107" height="24" rx="8" fill="#f2a65a"/><text x="318" y="92">3.56</text>
+          <text x="10" y="140">On-device (QAT)</text><rect x="200" y="125" width="60" height="24" rx="8" fill="#e07a5f"/><text x="270" y="142">2</text>
+          <text x="10" y="185" fill="#7a6060">Decoder bits per weight, as reported by Apple</text>
+        </g>
+      </svg>
+      <figcaption>An 8x reduction from FP16 to 2 bits for on-device decoder weights.</figcaption>
+    </figure>
+
+    <h2>Lesson 4: Design for parallelism, not just size</h2>
+    <p>PT-MoE's insight is that communication, not computation, can dominate at scale. Fewer synchronization points mean better throughput on many devices. In a recommendation serving path, the equivalent is fan-out: retrieval from several candidate sources, feature lookups and model calls. Collapsing synchronous hops (for example, batching feature fetches per request instead of per candidate) is often the cheapest latency win available.</p>
+
+    <h2>Lesson 5: Measure regressions per capability</h2>
+    <p>Apple's honest reporting of a regression on one benchmark alongside an improvement on another is the right habit. A compressed ranker should be evaluated per segment: head versus tail queries, new versus returning visitors, each locale. An average NDCG that holds steady can hide a large regression on long-tail searches, which is exactly where compression tends to hurt.</p>
+
+    <blockquote>Efficiency is a feature. It decides how many good ideas you can afford to ship.</blockquote>
+
+    <div class="sources">
+      <strong>Sources</strong>
+      <ul>
+        <li><a href="https://arxiv.org/abs/2507.13575" target="_blank" rel="noopener">Apple Intelligence Foundation Language Models: Tech Report 2025</a></li>
+        <li><a href="https://machinelearning.apple.com/research/apple-foundation-models-2025-updates" target="_blank" rel="noopener">Updates to Apple's On-Device and Server Foundation Language Models</a>, Apple Machine Learning Research</li>
+      </ul>
+    </div>
+  </article>
+  <script src="../assets/article.js"></script>
+</body>
+</html>
